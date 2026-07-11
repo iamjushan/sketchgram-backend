@@ -33,6 +33,9 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Serves the app's frontend (index.html) so the Android app can load it
+// from this live URL instead of a file bundled inside the APK.
+app.use(express.static(path.join(__dirname, 'public')));
 
 // ---------- health check (for uptime pingers like UptimeRobot) ----------
 // No auth required - just confirms the server process is awake and responding.
