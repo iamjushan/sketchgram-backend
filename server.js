@@ -17,6 +17,8 @@ const path = require('path');
 const fs = require('fs');
 const { Server } = require('socket.io');
 const db = require('./db');
+const { v2: cloudinary } = require('cloudinary');
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const INVITE_CODE = process.env.INVITE_CODE || '4377';
@@ -37,13 +39,18 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.get('/health', (req, res) => res.status(200).send('OK'));
 
 // ---------- uploads (avatars, story media, chat attachments) ----------
-const uploadDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '';
-    cb(null, Date.now() + '-' + Math.round(Math.random() * 1e9) + ext);
+// Stored on Cloudinary (not local disk) so files survive redeploys/restarts.
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+const storage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'sketchgram',
+    resource_type: 'auto', // handles images AND videos automatically
+    public_id: (req, file) => Date.now() + '-' + Math.round(Math.random() * 1e9)
   }
 });
 const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } });
@@ -123,7 +130,8 @@ app.post('/api/upload', authMiddleware, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
   const kind = req.file.mimetype.startsWith('image/') ? 'image'
     : req.file.mimetype.startsWith('video/') ? 'video' : 'file';
-  res.json({ url: `/uploads/${req.file.filename}`, name: req.file.originalname, kind });
+  // req.file.path is the full Cloudinary URL when using CloudinaryStorage
+  res.json({ url: req.file.path, name: req.file.originalname, kind });
 });
 
 // ================= USERS / CONTACTS =================
@@ -138,6 +146,26 @@ app.get('/api/users/:id', authMiddleware, (req, res) => {
   const row = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Not found' });
   res.json(publicUser(row));
+});
+
+// Add someone as a contact — saved immediately for BOTH accounts,
+// so they show up on each other's list even before any message is sent.
+app.post('/api/contacts', authMiddleware, (req, res) => {
+  const cid = parseInt(req.body && req.body.contactId, 10);
+  if (!cid || cid === req.user.uid) return res.status(400).json({ error: 'Invalid contact' });
+  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(cid);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  db.prepare('INSERT OR IGNORE INTO contacts (user_id, contact_id) VALUES (?,?)').run(req.user.uid, cid);
+  db.prepare('INSERT OR IGNORE INTO contacts (user_id, contact_id) VALUES (?,?)').run(cid, req.user.uid);
+  res.json({ ok: true, contact: publicUser(target) });
+});
+
+// Get everyone the logged-in user has added as a contact.
+app.get('/api/contacts', authMiddleware, (req, res) => {
+  const rows = db.prepare(
+    `SELECT u.* FROM contacts c JOIN users u ON u.id = c.contact_id WHERE c.user_id = ?`
+  ).all(req.user.uid);
+  res.json(rows.map(publicUser));
 });
 
 // ================= THREADS / MESSAGES =================
