@@ -781,6 +781,18 @@
   </div>
 </div>
 
+<!-- ===== NEW CHAT / BROWSE USERS MODAL ===== -->
+<div class="modal-overlay" id="browseUsersModal">
+  <div class="modal-card" style="max-height:80vh;display:flex;flex-direction:column;">
+    <h3>New chat</h3>
+    <input class="search" id="browseUsersSearch" placeholder="Search people by name..." style="margin-bottom:12px;flex-shrink:0;">
+    <div id="browseUsersList" style="overflow-y:auto;flex:1;min-height:120px;"></div>
+    <div class="modal-actions">
+      <div class="auth-btn secondary" id="browseUsersCancel">Close</div>
+    </div>
+  </div>
+</div>
+
 <!-- ===== STORY VIEWER (fullscreen) ===== -->
 <div class="story-viewer" id="storyViewer">
   <div class="sv-bars" id="svBars"></div>
@@ -2164,23 +2176,59 @@ document.getElementById('profileSave').onclick = function(){
     }
   };
 
-  // ---------- new: start a chat with any registered user ----------
-  document.getElementById('menuNewChat').onclick = async () => {
-    menuPop.classList.remove('show');
-    const name = prompt("Start a chat with who? (enter their exact Sketchgram name)");
-    if (!name || !name.trim()) return;
+  // ---------- new: browse & search all registered users, tap to start a chat ----------
+  const browseUsersModal = document.getElementById('browseUsersModal');
+  const browseUsersList = document.getElementById('browseUsersList');
+  const browseUsersSearch = document.getElementById('browseUsersSearch');
+  let browseSearchTimer = null;
+
+  async function renderBrowseUsers(query){
+    browseUsersList.innerHTML = '<div style="text-align:center;padding:30px;color:var(--ink-soft);">Loading...</div>';
     try {
-      const results = await api('/api/users?q=' + encodeURIComponent(name.trim().toLowerCase()));
-      const match = results.find(u => u.name.toLowerCase() === name.trim().toLowerCase());
-      if (!match) { showCallToast('No user found with that exact name. Check the spelling and try again.'); return; }
-      await api('/api/contacts', { method: 'POST', body: { contactId: match.id } });
-      upsertChat(match);
-      renderChatList();
-      window.openChat(match.id);
+      const results = await api('/api/users?q=' + encodeURIComponent((query||'').toLowerCase()));
+      if (!results.length) {
+        browseUsersList.innerHTML = '<div style="text-align:center;padding:30px;color:var(--ink-soft);">No one found. Try a different search.</div>';
+        return;
+      }
+      browseUsersList.innerHTML = '';
+      results.forEach(u => {
+        const div = document.createElement('div');
+        div.className = 'chat-item';
+        div.innerHTML = `
+          <div class="avatar" style="background:${colorFor(u.id)}">${u.avatar ? `<img src="${u.avatar}">` : initials(u.name)}</div>
+          <div class="chat-meta">
+            <div class="chat-name">${u.name}</div>
+            <div class="chat-last">${u.status || ''}</div>
+          </div>`;
+        div.onclick = async () => {
+          try {
+            await api('/api/contacts', { method: 'POST', body: { contactId: u.id } });
+            upsertChat(u);
+            renderChatList();
+            browseUsersModal.classList.remove('show');
+            window.openChat(u.id);
+          } catch(e) {
+            showCallToast('Could not start chat: ' + e.message);
+          }
+        };
+        browseUsersList.appendChild(div);
+      });
     } catch(e) {
-      showCallToast('Could not start chat: ' + e.message);
+      browseUsersList.innerHTML = '<div style="text-align:center;padding:30px;color:var(--ink-soft);">Could not load people right now.</div>';
     }
+  }
+
+  document.getElementById('menuNewChat').onclick = () => {
+    menuPop.classList.remove('show');
+    browseUsersSearch.value = '';
+    browseUsersModal.classList.add('show');
+    renderBrowseUsers('');
   };
+  document.getElementById('browseUsersCancel').onclick = () => browseUsersModal.classList.remove('show');
+  browseUsersSearch.addEventListener('input', () => {
+    clearTimeout(browseSearchTimer);
+    browseSearchTimer = setTimeout(() => renderBrowseUsers(browseUsersSearch.value), 250);
+  });
 
   restoreSession();
 })();
