@@ -24,14 +24,13 @@
 
 <title>Sketchgram</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Kalam:wght@400;700&family=Patrick+Hand&family=Caveat:wght@700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Kalam:wght@400;700&family=Patrick+Hand&family=Caveat:wght@700&display=swap" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Kalam:wght@400;700&family=Patrick+Hand&family=Caveat:wght@700&display=swap"></noscript>
 <script>
   // TODO: set this to your deployed backend URL (e.g. from Railway) before building the APK.
   // Do NOT leave this as localhost — that only works on an emulator on the same machine, not a real phone.
   window.SKETCHGRAM_API = "https://sketchgram-backend.onrender.com";
 </script>
-<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <style>
   :root{
     --paper:#1A1B2E;
@@ -954,6 +953,11 @@
       <div class="cs-ctrl end-call" id="csEndCall">📵</div>
     </div>
   </div>
+
+<!-- Loaded here (not in <head>) so the visible app draws instantly instead of -->
+<!-- waiting on these external files to download before anything can show. -->
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </div>
 
 <!-- ═══ ADMIN PANEL (JUSHAN SINHA only) ═══ -->
