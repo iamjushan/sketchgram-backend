@@ -134,6 +134,7 @@
   }
   .search:focus{border-color:var(--blue);}
   .search::placeholder{color:var(--ink-soft);}
+  @keyframes pulseRec{ 0%,100%{opacity:1;} 50%{opacity:0.3;} }
 
   /* ---------- stories bar ---------- */
   .stories-bar{
@@ -872,6 +873,13 @@
           <div class="icon-btn" id="attachBtn" title="Attach photo, video or any file">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M7 13l6-6a4 4 0 1 1 6 6l-9 9a3 3 0 0 1-4-4l8-8" stroke="#E8E3F0" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
           </div>
+          <div class="icon-btn" id="micBtn" title="Record a voice message">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="9" y="2" width="6" height="12" rx="3" fill="#E8E3F0"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3" stroke="#E8E3F0" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+          </div>
+          <div id="recordingIndicator" style="display:none;align-items:center;gap:8px;color:var(--red);font-size:14px;font-family:Kalam,cursive;font-weight:700;padding:0 6px;white-space:nowrap;">
+            <span style="width:10px;height:10px;border-radius:50%;background:var(--red);display:inline-block;animation:pulseRec 1s infinite;"></span>
+            <span id="recordingTime">0:00</span>
+          </div>
           <div class="icon-btn" id="emojiBtn" title="Emoji">🙂</div>
           <div class="emoji-pop" id="emojiPop"></div>
           <textarea id="msgInput" placeholder="Write something, or paste a link..." rows="1"></textarea>
@@ -1093,6 +1101,9 @@ function bubbleMediaHTML(att){
   }
   if(att.kind === 'video'){
     return `<div class="media-wrap"><video src="${att.url}" controls playsinline></video></div>`;
+  }
+  if(att.kind === 'audio'){
+    return `<div class="media-wrap" style="padding:8px 4px;"><audio src="${att.url}" controls style="width:220px;max-width:70vw;"></audio></div>`;
   }
   return `<div class="file-chip">📎 ${escapeHtml(att.name)}</div>`;
 }
@@ -1982,7 +1993,8 @@ document.getElementById('profileSave').onclick = function(){
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Upload failed');
-    return API_BASE + data.url; // absolute URL so it renders from any device
+    // data.url may already be a full URL (e.g. Cloudinary) or a relative path (local disk)
+    return data.url.startsWith('http') ? data.url : API_BASE + data.url;
   }
 
   function upsertChat(user){
@@ -2017,7 +2029,7 @@ document.getElementById('profileSave').onclick = function(){
         if (msgs.length) {
           const lastM = msgs[msgs.length - 1];
           c.last = lastM.attachments && lastM.attachments.length
-            ? (lastM.attachments[0].kind === 'image' ? 'sent a photo' : lastM.attachments[0].kind === 'video' ? 'sent a video' : 'sent a file')
+            ? (lastM.attachments[0].kind === 'image' ? 'sent a photo' : lastM.attachments[0].kind === 'video' ? 'sent a video' : lastM.attachments[0].kind === 'audio' ? 'sent a voice message' : 'sent a file')
             : lastM.text;
         }
       } catch(e){ /* thread has no messages yet */ }
@@ -2113,7 +2125,89 @@ document.getElementById('profileSave').onclick = function(){
     if (_origLogout) _origLogout();
   };
 
-  // ---------- override: sendMessage posts to backend, no more local-only push ----------
+  // ---------- new: record and send voice messages ----------
+  const micBtn = document.getElementById('micBtn');
+  const recordingIndicator = document.getElementById('recordingIndicator');
+  const recordingTimeEl = document.getElementById('recordingTime');
+  let mediaRecorder = null;
+  let recordedChunks = [];
+  let recordingStartTime = 0;
+  let recordingTimer = null;
+  let isRecording = false;
+
+  function formatRecTime(ms){
+    const totalSec = Math.floor(ms/1000);
+    const m = Math.floor(totalSec/60);
+    const s = totalSec % 60;
+    return m + ':' + String(s).padStart(2,'0');
+  }
+
+  async function startRecording(){
+    if (!activeChat) { showCallToast('Open a chat first.'); return; }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showCallToast('Voice messages are not supported on this device/browser.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordedChunks = [];
+      mediaRecorder = new MediaRecorder(stream);
+      mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
+      mediaRecorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+        sendVoiceMessage(blob);
+      };
+      mediaRecorder.start();
+      isRecording = true;
+      recordingStartTime = Date.now();
+      micBtn.style.background = 'var(--red)';
+      recordingIndicator.style.display = 'flex';
+      document.getElementById('msgInput').style.display = 'none';
+      recordingTimer = setInterval(() => {
+        recordingTimeEl.textContent = formatRecTime(Date.now() - recordingStartTime);
+      }, 250);
+    } catch (e) {
+      showCallToast('Could not access microphone: ' + e.message);
+    }
+  }
+
+  function stopRecording(){
+    if (mediaRecorder && isRecording) {
+      mediaRecorder.stop();
+    }
+    isRecording = false;
+    clearInterval(recordingTimer);
+    micBtn.style.background = '';
+    recordingIndicator.style.display = 'none';
+    document.getElementById('msgInput').style.display = '';
+  }
+
+  async function sendVoiceMessage(blob){
+    if (!activeChat) return;
+    const toastId = 'Sending voice message...';
+    showCallToast(toastId);
+    try {
+      const file = new File([blob], 'voice-message.webm', { type: blob.type || 'audio/webm' });
+      const url = await uploadFile(file);
+      const msg = await api(`/api/threads/${activeChat}/messages`, {
+        method: 'POST',
+        body: { text: '', attachments: [{ name: 'voice-message.webm', url, kind: 'audio' }] }
+      });
+      if (!messages[activeChat]) messages[activeChat] = [];
+      messages[activeChat].push({ who: 'me', text: msg.text, attachments: msg.attachments, time: msg.time });
+      const c = chats.find(c => c.id === activeChat);
+      if (c) c.last = 'sent a voice message';
+      renderThread(); renderChatList();
+    } catch (e) {
+      showCallToast('Voice message failed to send: ' + e.message);
+    }
+  }
+
+  micBtn.addEventListener('click', () => {
+    if (!isRecording) startRecording();
+    else stopRecording();
+  });
   window.sendMessage = async function(){
     if (!activeChat) return;
     const input = document.getElementById('msgInput');
@@ -2140,7 +2234,7 @@ document.getElementById('profileSave').onclick = function(){
       if (!messages[activeChat]) messages[activeChat] = [];
       messages[activeChat].push({ who: 'me', text: msg.text, attachments: msg.attachments, time: msg.time });
       const c = chats.find(c => c.id === activeChat);
-      if (c) c.last = attachments && attachments.length ? (attachments[0].kind==='image'?'sent a photo':attachments[0].kind==='video'?'sent a video':'sent a file') : text;
+      if (c) c.last = attachments && attachments.length ? (attachments[0].kind==='image'?'sent a photo':attachments[0].kind==='video'?'sent a video':attachments[0].kind==='audio'?'sent a voice message':'sent a file') : text;
       renderThread(); renderChatList();
     } catch (e) {
       showCallToast('Message failed to send: ' + e.message);
